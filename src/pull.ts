@@ -1,7 +1,9 @@
 import * as fs from "fs-extra";
+import sanitize from "sanitize-filename";
 
 import { NotionToMarkdown } from "notion-to-md";
 import { HierarchicalNamedLayoutStrategy } from "./HierarchicalNamedLayoutStrategy";
+import { FlatSidebarLayoutStrategy } from "./FlatSidebarLayoutStrategy";
 import { LayoutStrategy } from "./LayoutStrategy";
 import { NotionPage, PageType } from "./NotionPage";
 import { initImageHandling, cleanupOldImages } from "./images";
@@ -18,6 +20,7 @@ import {
 } from "./log";
 import { IDocuNotionContext } from "./plugins/pluginTypes";
 import { getMarkdownForPage } from "./transform";
+import { ListBlockChildrenResponseResults } from "notion-to-md/build/types";
 import {
   BlockObjectResponse,
   GetPageResponse,
@@ -29,7 +32,6 @@ import { exit } from "process";
 import { IDocuNotionConfig, loadConfigAsync } from "./config/configuration";
 import { NotionBlock } from "./types";
 import { convertInternalUrl } from "./plugins/internalLinks";
-import { ListBlockChildrenResponseResults } from "notion-to-md/build/types";
 
 type ImageFileNameFormat = "default" | "content-hash" | "legacy";
 export type DocuNotionOptions = {
@@ -46,8 +48,33 @@ export type DocuNotionOptions = {
 };
 
 let layoutStrategy: LayoutStrategy;
+
+// Cache to avoid processing the same page multiple times
+const processedPageIds = new Set<string>();
 let notionToMarkdown: NotionToMarkdown;
 const pages = new Array<NotionPage>();
+
+// Structure for tracking page occurrences and building sidebar hierarchy
+interface PageOccurrence {
+  page: NotionPage;
+  layoutContext: string;
+  hierarchyLevel: number;
+  discoveryOrder: number;
+  isReference: boolean; // true if this should be a sidebar reference
+}
+
+// Map to track all occurrences of each page for deduplication
+const pageOccurrences = new Map<string, PageOccurrence[]>();
+let discoveryOrder = 0;
+
+// Structure for sidebar generation
+interface SidebarItem {
+  type: 'doc' | 'category' | 'ref' | 'link';
+  id?: string;
+  label?: string;
+  items?: SidebarItem[];
+  href?: string;
+}
 const counts = {
   output_normally: 0,
   skipped_because_empty: 0,
@@ -57,6 +84,12 @@ const counts = {
 };
 
 export async function notionPull(options: DocuNotionOptions): Promise<void> {
+  // Reset the processed pages cache and deduplication structures for each pull operation
+  processedPageIds.clear();
+  pageOccurrences.clear();
+  discoveryOrder = 0;
+  pages.length = 0; // Clear the pages array
+  
   // It's helpful when troubleshooting CI secrets and environment variables to see what options actually made it to docu-notion.
   // eslint-disable-next-line @typescript-eslint/no-unsafe-call
   const optionsForLogging = { ...options };
@@ -76,7 +109,8 @@ export async function notionPull(options: DocuNotionOptions): Promise<void> {
   const notionClient = initNotionClient(options.notionToken);
   notionToMarkdown = new NotionToMarkdown({ notionClient });
 
-  layoutStrategy = new HierarchicalNamedLayoutStrategy();
+  // Use flat structure with sidebars.js instead of hierarchical folders
+  layoutStrategy = new FlatSidebarLayoutStrategy();
 
   await fs.mkdir(options.markdownOutputPath, { recursive: true });
   layoutStrategy.setRootDirectoryForMarkdown(
@@ -180,8 +214,290 @@ async function outputPages(
 
   if (counts.error_because_no_slug > 0) exit(1);
 
+  // Generate sidebars.js for flat structure
+  verbose("Layout strategy type: " + layoutStrategy.constructor.name);
+  if (layoutStrategy instanceof FlatSidebarLayoutStrategy) {
+    generateSidebarsFile(options.markdownOutputPath);
+  } else {
+    verbose("Not generating sidebars.js - using hierarchical strategy");
+  }
+
   info(`Finished processing ${pages.length} pages`);
   info(JSON.stringify(counts));
+}
+
+// Generate sidebars.js file based on page occurrences and hierarchy
+function generateSidebarsFile(outputPath: string): void {
+  verbose("Generating sidebars.js file...");
+  
+  const sidebarItems: SidebarItem[] = [];
+  const processedContexts = new Set<string>();
+  
+  // Process all page occurrences to build the sidebar structure
+  for (const [pageId, occurrences] of pageOccurrences) {
+    // Only process the first occurrence (main page)
+    const mainOccurrence = occurrences.find(occ => !occ.isReference);
+    if (!mainOccurrence) continue;
+    
+    const page = mainOccurrence.page;
+    const context = mainOccurrence.layoutContext;
+    
+    // Create sidebar item for this page
+    const sidebarItem: SidebarItem = {
+      type: 'doc',
+      id: getDocId(page),
+      label: page.nameOrTitle
+    };
+    
+    // If this is a top-level page (level 0), add directly to sidebar
+    if (mainOccurrence.hierarchyLevel === 0) {
+      sidebarItems.push(sidebarItem);
+    } else {
+      // For nested pages, we need to create category structure
+      // This is a simplified version - in a full implementation we'd need to 
+      // properly reconstruct the hierarchy from layoutContext
+      const category = createCategoryFromContext(context, page);
+      if (category && !processedContexts.has(context)) {
+        sidebarItems.push(category);
+        processedContexts.add(context);
+      }
+    }
+    
+    // Add references for duplicate occurrences
+    for (const occurrence of occurrences) {
+      if (occurrence.isReference) {
+        const refItem: SidebarItem = {
+          type: 'ref',
+          id: getDocId(page)
+        };
+        
+        // Add reference at appropriate level
+        if (occurrence.hierarchyLevel === 0) {
+          sidebarItems.push(refItem);
+        }
+      }
+    }
+  }
+  
+  // Generate the sidebars.js content
+  const sidebarContent = `module.exports = {
+  docs: ${JSON.stringify(sidebarItems, null, 2)}
+};`;
+  
+  // Write the sidebars.js file
+  const sidebarPath = outputPath.replace(/docs\/?$/, '') + '/sidebars.js';
+  fs.writeFileSync(sidebarPath, sidebarContent);
+  verbose(`Generated sidebars.js at ${sidebarPath}`);
+}
+
+// Helper function to get document ID from page
+function getDocId(page: NotionPage): string {
+  // Use slug without leading slash as document ID
+  let docId = page.slug;
+  if (docId.startsWith('/')) {
+    docId = docId.substring(1);
+  }
+  
+  // If no slug or it's a Notion ID, use sanitized name
+  if (!docId || docId.trim() === '' || isNotionId(docId)) {
+    docId = sanitize(page.nameForFile())
+      .replaceAll("//", "/")
+      .replaceAll("%20", "-")
+      .replaceAll(" ", "-")
+      .replaceAll('"', "")
+      .replaceAll(/[""]/g, "")
+      .replaceAll(/[""]/g, "")
+      .replaceAll("'", "")
+      .replaceAll("?", "-")
+      .toLowerCase();
+  }
+  
+  return docId;
+}
+
+// Helper function to check if string is a Notion ID
+function isNotionId(str: string): boolean {
+  return str.includes('-') && str.length > 30 && /^[a-f0-9-]+$/.test(str);
+}
+
+// Helper function to create category from context (simplified)
+function createCategoryFromContext(context: string, page: NotionPage): SidebarItem | null {
+  // This is a simplified implementation
+  // In a full version, we'd need to properly parse the context hierarchy
+  const parts = context.split('/').filter(p => p.length > 0);
+  if (parts.length === 0) return null;
+  
+  return {
+    type: 'category',
+    label: parts[parts.length - 1].replaceAll('-', ' '),
+    items: [{
+      type: 'doc',
+      id: getDocId(page)
+    }]
+  };
+}
+
+// Function to add a page with deduplication logic
+function addPageWithDeduplication(
+  page: NotionPage, 
+  layoutContext: string, 
+  hierarchyLevel: number
+): void {
+  const pageId = page.pageId;
+  
+  // Get or create the occurrences array for this page
+  if (!pageOccurrences.has(pageId)) {
+    pageOccurrences.set(pageId, []);
+  }
+  
+  const occurrences = pageOccurrences.get(pageId)!;
+  
+  // Create the occurrence record
+  const occurrence: PageOccurrence = {
+    page,
+    layoutContext,
+    hierarchyLevel,
+    discoveryOrder: discoveryOrder++,
+    isReference: occurrences.length > 0 // First occurrence is main, others are references
+  };
+  
+  occurrences.push(occurrence);
+  
+  // Only add to the pages array if this is the first occurrence (main page)
+  if (!occurrence.isReference) {
+    pages.push(page);
+    verbose(`Added main page: ${page.nameOrTitle} at level ${hierarchyLevel}`);
+  } else {
+    verbose(`Added reference to existing page: ${page.nameOrTitle} at level ${hierarchyLevel} (will be sidebar ref)`);
+  }
+}
+
+// Calculate hierarchy level based on layout context
+function getHierarchyLevel(layoutContext: string): number {
+  return (layoutContext.match(/\//g) || []).length;
+}
+
+// Extract internal page links found in paragraph text content
+// This discovers pages that are linked from within text, not just direct link_to_page blocks
+async function extractInternalLinksFromContent(
+  pageBlocks: ListBlockChildrenResponseResults
+): Promise<string[]> {
+  const linkIds: string[] = [];
+  const linkRegExp = /\[([^\]]+)?\]\((?:https?:\/\/www\.notion\.so\/|\/)?([^),^/]+)\)/g;
+  
+  for (const block of pageBlocks) {
+    // Handle direct link_to_page blocks
+    if ((block as any).type === "link_to_page") {
+      const pageId = (block as any).link_to_page?.page_id;
+      if (pageId) {
+        linkIds.push(pageId);
+      }
+    }
+    // Handle links within paragraph text content
+    else if ((block as any).type === "paragraph") {
+      const paragraph = (block as any).paragraph;
+      if (paragraph.rich_text && Array.isArray(paragraph.rich_text)) {
+        for (const richText of paragraph.rich_text) {
+          if (richText.href) {
+            // Direct href links in rich text
+            const match = /https:\/\/www\.notion\.so\S+-([a-z,0-9]+)+.*/.exec(richText.href);
+            if (match && match[1]) {
+              linkIds.push(match[1]);
+            }
+          }
+          if (richText.plain_text) {
+            // Links embedded in plain text (markdown style)
+            let match;
+            while ((match = linkRegExp.exec(richText.plain_text)) !== null) {
+              const linkId = match[2];
+              if (linkId && linkId.length > 10) { // Basic validation for Notion IDs
+                linkIds.push(linkId);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  // Remove duplicates and return
+  return [...new Set(linkIds)];
+}
+
+// Discover and process pages that are linked from within content
+async function discoverLinkedPages(
+  options: DocuNotionOptions,
+  config: IDocuNotionConfig,
+  layoutContext: string,
+  pageBlocks: ListBlockChildrenResponseResults,
+  currentPage: NotionPage
+): Promise<void> {
+  const allowMixedContentPages = config.allowMixedContentPages || options.allowMixedContentPages;
+  
+  // Only discover linked pages if allowMixedContentPages is enabled
+  if (!allowMixedContentPages) {
+    return;
+  }
+
+  const linkedPageIds = await extractInternalLinksFromContent(pageBlocks);
+  
+  // If this page has linked pages, mark it as mixed content and create a folder structure
+  if (linkedPageIds.length > 0) {
+    currentPage.hasMixedContent = true;
+    
+    // Create a new layout context for the linked pages (subfolder)
+    // Use the same naming logic as getIndexPathForPage to avoid duplicate folders
+    const sanitizedPageName = currentPage.nameForFile()
+      .replaceAll("//", "/")
+      .replaceAll("%20", "-")
+      .replaceAll(" ", "-")
+      .replaceAll('"', "")
+      .replaceAll(/[""]/g, "")
+      .replaceAll(/[""]/g, "")
+      .replaceAll("'", "")
+      .replaceAll("?", "-");
+    
+    const newLayoutContext = layoutStrategy.newLevel(
+      options.markdownOutputPath,
+      currentPage.order,
+      layoutContext,
+      sanitizedPageName
+    );
+    
+    for (const linkedPageId of linkedPageIds) {
+      // Skip if we've already processed this page
+      if (processedPageIds.has(linkedPageId)) {
+        continue;
+      }
+      
+      try {
+        // Add to processed cache immediately to avoid infinite loops
+        processedPageIds.add(linkedPageId);
+        
+        verbose(`Discovering linked page: ${linkedPageId} from ${currentPage.nameOrTitle} in subfolder ${newLayoutContext}`);
+        
+        // Create the linked page with the new context (places it in the subfolder)
+        const linkedPage = await fromPageId(
+          newLayoutContext,
+          linkedPageId,
+          pages.length, // Use current pages length as order
+          false // Not found directly in outline
+        );
+        
+        // Use deduplication logic instead of direct push
+        addPageWithDeduplication(linkedPage, newLayoutContext, getHierarchyLevel(newLayoutContext));
+        
+        // Recursively discover and process the linked page's content (with its own context)
+        const linkedPageBlocks = await getBlockChildren(linkedPage.pageId);
+        await discoverLinkedPages(options, config, newLayoutContext, linkedPageBlocks, linkedPage);
+        
+      } catch (error) {
+        verbose(`Could not fetch linked page ${linkedPageId}: ${error}`);
+        // Remove from processed cache if we failed to process it
+        processedPageIds.delete(linkedPageId);
+      }
+    }
+  }
 }
 
 // This walks the "Outline" page and creates a list of all the nodes that will
@@ -233,7 +549,14 @@ async function getPagesRecursively(
       pageInTheOutline.hasMixedContent = true;
     }
     
-    pages.push(pageInTheOutline);
+    // Use deduplication logic instead of direct push
+    addPageWithDeduplication(pageInTheOutline, incomingContext, getHierarchyLevel(incomingContext));
+    
+    // Mark this page as processed to avoid infinite loops
+    processedPageIds.add(pageInTheOutline.pageId);
+    
+    // Discover any pages that are linked from within this page's content
+    await discoverLinkedPages(options, config, incomingContext, r, pageInTheOutline);
 
     // The best practice is to keep content pages in the "database" (e.g. kanban board), but we do allow people to make pages in the outline directly.
     // So how can we tell the difference between a page that is supposed to be content and one that is meant to form the sidebar? If it
@@ -280,14 +603,19 @@ async function getPagesRecursively(
         );
       }
       for (const linkPageInfo of pageInfo.linksPageIdsAndOrder) {
-        pages.push(
-          await fromPageId(
-            layoutContext,
-            linkPageInfo.id,
-            linkPageInfo.order,
-            false
-          )
+        const linkedPage = await fromPageId(
+          layoutContext,
+          linkPageInfo.id,
+          linkPageInfo.order,
+          false
         );
+        // Use deduplication logic instead of direct push
+        addPageWithDeduplication(linkedPage, layoutContext, getHierarchyLevel(layoutContext));
+        
+        // Mark this page as processed and discover its linked pages
+        processedPageIds.add(linkedPage.pageId);
+        const linkedPageBlocks = await getBlockChildren(linkedPage.pageId);
+        await discoverLinkedPages(options, config, layoutContext, linkedPageBlocks, linkedPage);
       }
     }
   }
@@ -320,14 +648,19 @@ async function getPagesRecursively(
 
     // Process linked pages for regular outline pages
     for (const linkPageInfo of pageInfo.linksPageIdsAndOrder) {
-      pages.push(
-        await fromPageId(
-          layoutContext,
-          linkPageInfo.id,
-          linkPageInfo.order,
-          false
-        )
+      const linkedPage = await fromPageId(
+        layoutContext,
+        linkPageInfo.id,
+        linkPageInfo.order,
+        false
       );
+      // Use deduplication logic instead of direct push
+      addPageWithDeduplication(linkedPage, layoutContext, getHierarchyLevel(layoutContext));
+      
+      // Mark this page as processed and discover its linked pages
+      processedPageIds.add(linkedPage.pageId);
+      const linkedPageBlocks = await getBlockChildren(linkedPage.pageId);
+      await discoverLinkedPages(options, config, layoutContext, linkedPageBlocks, linkedPage);
     }
   } else {
     console.info(
