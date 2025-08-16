@@ -267,6 +267,14 @@ function generateSidebarsFile(outputPath: string): void {
     return a.order - b.order;
   });
   
+  // Debug: Log page hierarchy
+  verbose("=== PAGE HIERARCHY DEBUG ===");
+  for (const page of uniquePages) {
+    const level = getHierarchyLevel(page.layoutContext);
+    verbose(`Page: "${page.nameOrTitle}" | Context: "${page.layoutContext}" | Level: ${level} | Order: ${page.order}`);
+  }
+  verbose("=== END DEBUG ===");
+  
   // Build the sidebar structure
   const sidebarItems = buildCleanSidebarStructure(uniquePages);
   
@@ -299,8 +307,8 @@ function buildCleanSidebarStructure(pages: NotionPage[]): SidebarItem[] {
       });
     } else {
       // Level 1+: Nested pages (create categories)
-      const parentContext = getParentContext(page.layoutContext);
-      const parentPage = findParentPage(pages, parentContext);
+      const parentPage = findParentPage(pages, page.layoutContext);
+      verbose(`Child: "${page.nameOrTitle}" | Context: "${page.layoutContext}" | Parent found: ${parentPage?.nameOrTitle || 'NONE'}`);
       
       if (parentPage) {
         const categoryLabel = parentPage.nameOrTitle;
@@ -337,12 +345,32 @@ function getParentContext(layoutContext: string): string {
   return '/' + parts.slice(0, -1).join('/');
 }
 
-// Find parent page by context
-function findParentPage(pages: NotionPage[], parentContext: string): NotionPage | null {
-  return pages.find(page => 
-    page.layoutContext === parentContext || 
-    (parentContext === '/' && getHierarchyLevel(page.layoutContext) === 0)
-  ) || null;
+// Find parent page by matching the context pattern
+function findParentPage(pages: NotionPage[], childContext: string): NotionPage | null {
+  // Extract parent name from child context path
+  // e.g., "/Les-Briques-de-Configuration-Fondamentales" -> "Les-Briques-de-Configuration-Fondamentales"
+  const contextParts = childContext.split('/').filter(p => p.length > 0);
+  if (contextParts.length === 0) return null;
+  
+  const parentContextName = contextParts[contextParts.length - 1];
+  verbose(`Looking for parent with context name: "${parentContextName}"`);
+  
+  // Find the page with level 0 whose slug matches the context
+  return pages.find(page => {
+    if (getHierarchyLevel(page.layoutContext) !== 0) return false;
+    
+    // Get the slug without leading slash for comparison
+    let pageSlug = page.slug;
+    if (pageSlug.startsWith('/')) {
+      pageSlug = pageSlug.substring(1);
+    }
+    
+    verbose(`  Checking page: "${page.nameOrTitle}" with slug: "${pageSlug}"`);
+    
+    // Match context name with page slug
+    return parentContextName === pageSlug ||
+           parentContextName.toLowerCase() === pageSlug.toLowerCase();
+  }) || null;
 }
 
 // Helper function to get document ID from page
