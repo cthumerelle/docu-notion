@@ -126,7 +126,18 @@ export class NotionPage {
   }
 
   public get slug(): string {
-    return this.explicitSlug() ?? "/" + this.pageId;
+    return this.explicitSlug() ?? this.generateSlugFromName();
+  }
+
+  private generateSlugFromName(): string {
+    // Generate a clean slug from the page name
+    const name = this.nameOrTitle.toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '') // Remove special chars except spaces and hyphens
+      .replace(/\s+/g, '-') // Replace spaces with hyphens
+      .replace(/-+/g, '-') // Replace multiple hyphens with single
+      .replace(/^-|-$/g, ''); // Remove leading/trailing hyphens
+    
+    return '/' + (name || this.pageId);
   }
   public get hasExplicitSlug(): boolean {
     return this.explicitSlug() !== undefined;

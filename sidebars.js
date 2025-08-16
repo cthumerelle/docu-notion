@@ -6,16 +6,6 @@ module.exports = {
     "label": "Les Briques de Configuration Fondamentales"
   },
   {
-    "type": "category",
-    "label": "Les Briques de Configuration Fondamentales",
-    "items": [
-      {
-        "type": "doc",
-        "id": "collecteurs"
-      }
-    ]
-  },
-  {
     "type": "doc",
     "id": "introduction-à-netvigie-tracking",
     "label": "Introduction à Netvigie Tracking"
@@ -32,42 +22,59 @@ module.exports = {
   },
   {
     "type": "category",
-    "label": "configuration plan de marquage",
+    "label": "configuration-plan-de-marquage",
     "items": [
       {
         "type": "doc",
         "id": "gestion-des-tags"
+      },
+      {
+        "type": "ref",
+        "id": "gestion-des-tags"
+      },
+      {
+        "type": "doc",
+        "id": "datalayer"
+      },
+      {
+        "type": "doc",
+        "id": "plan-de-marquage"
+      },
+      {
+        "type": "doc",
+        "id": "regles-avancees"
       }
     ]
   },
   {
-    "type": "ref",
-    "id": "gestion-des-tags"
-  },
-  {
-    "type": "doc",
-    "id": "crawls",
-    "label": "Lancer les Analyses : Les Crawls"
-  },
-  {
-    "type": "doc",
-    "id": "analyse",
-    "label": "Analyse des Résultats et Actions Correctives"
-  },
-  {
-    "type": "doc",
-    "id": "advanced-features",
-    "label": "Fonctionnalités Avancées et Outils"
-  },
-  {
-    "type": "doc",
-    "id": "rgpd",
-    "label": "RGPD et Conformité"
-  },
-  {
-    "type": "doc",
-    "id": "annexe",
-    "label": "Annexe : Références Techniques"
+    "type": "category",
+    "label": "Les-Briques-de-Configuration-Fondamentales",
+    "items": [
+      {
+        "type": "doc",
+        "id": "collecteurs"
+      },
+      {
+        "type": "ref",
+        "id": "collecteurs"
+      },
+      {
+        "type": "doc",
+        "id": "contextes"
+      },
+      {
+        "type": "ref",
+        "id": "contextes"
+      },
+      {
+        "type": "doc",
+        "id": "scenarios"
+      },
+      {
+        "type": "ref",
+        "id": "scenarios"
+      }
+    ]
   }
 ]
 };

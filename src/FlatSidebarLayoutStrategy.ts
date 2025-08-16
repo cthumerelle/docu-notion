@@ -33,7 +33,7 @@ export class FlatSidebarLayoutStrategy extends LayoutStrategy {
   }
 
   private getFileNameFromSlug(page: NotionPage): string {
-    // Use the slug if available, otherwise create from name
+    // Use the slug if available, otherwise it will be generated from name by NotionPage.generateSlugFromName()
     let fileName = page.slug;
     
     // Remove leading slash from slug
@@ -41,18 +41,9 @@ export class FlatSidebarLayoutStrategy extends LayoutStrategy {
       fileName = fileName.substring(1);
     }
     
-    // If no slug or empty slug or it's a Notion ID, create from page name
-    if (!fileName || fileName.trim() === '' || this.isNotionId(fileName)) {
-      fileName = sanitize(page.nameForFile())
-        .replaceAll("//", "/")
-        .replaceAll("%20", "-")
-        .replaceAll(" ", "-")
-        .replaceAll('"', "")
-        .replaceAll(/[""]/g, "")
-        .replaceAll(/[""]/g, "")
-        .replaceAll("'", "")
-        .replaceAll("?", "-")
-        .toLowerCase(); // Make it lowercase for consistency
+    // Handle special case of root page (slug is "/") 
+    if (fileName === '' && page.slug === '/') {
+      return 'index';
     }
     
     return fileName;

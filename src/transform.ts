@@ -269,6 +269,7 @@ function getFrontMatter(page: NotionPage): string {
   frontmatter += `title: ${page.nameOrTitle.replaceAll(":", "-")}\n`; // I have not found a way to escape colons
   frontmatter += `sidebar_position: ${page.order}\n`;
   frontmatter += `slug: ${page.slug ?? ""}\n`;
+  frontmatter += `notion_id: ${page.pageId}\n`; // Add Notion page ID for future optimization
   if (page.keywords) frontmatter += `keywords: [${page.keywords}]\n`;
 
   frontmatter += "---\n";

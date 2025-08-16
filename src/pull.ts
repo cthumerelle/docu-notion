@@ -75,6 +75,18 @@ interface SidebarItem {
   items?: SidebarItem[];
   href?: string;
 }
+
+// Structure for building hierarchical sidebar
+interface HierarchyNode {
+  context: string;
+  level: number;
+  children: HierarchyNode[];
+  pages: {
+    page: NotionPage;
+    isReference: boolean;
+    occurrences: PageOccurrence[];
+  }[];
+}
 const counts = {
   output_normally: 0,
   skipped_because_empty: 0,
@@ -230,54 +242,33 @@ async function outputPages(
 function generateSidebarsFile(outputPath: string): void {
   verbose("Generating sidebars.js file...");
   
-  const sidebarItems: SidebarItem[] = [];
-  const processedContexts = new Set<string>();
+  // Collect all unique pages (only first occurrence, no references)
+  const uniquePages: NotionPage[] = [];
+  const processedPageIds = new Set<string>();
   
-  // Process all page occurrences to build the sidebar structure
   for (const [pageId, occurrences] of pageOccurrences) {
-    // Only process the first occurrence (main page)
-    const mainOccurrence = occurrences.find(occ => !occ.isReference);
-    if (!mainOccurrence) continue;
-    
-    const page = mainOccurrence.page;
-    const context = mainOccurrence.layoutContext;
-    
-    // Create sidebar item for this page
-    const sidebarItem: SidebarItem = {
-      type: 'doc',
-      id: getDocId(page),
-      label: page.nameOrTitle
-    };
-    
-    // If this is a top-level page (level 0), add directly to sidebar
-    if (mainOccurrence.hierarchyLevel === 0) {
-      sidebarItems.push(sidebarItem);
-    } else {
-      // For nested pages, we need to create category structure
-      // This is a simplified version - in a full implementation we'd need to 
-      // properly reconstruct the hierarchy from layoutContext
-      const category = createCategoryFromContext(context, page);
-      if (category && !processedContexts.has(context)) {
-        sidebarItems.push(category);
-        processedContexts.add(context);
-      }
-    }
-    
-    // Add references for duplicate occurrences
-    for (const occurrence of occurrences) {
-      if (occurrence.isReference) {
-        const refItem: SidebarItem = {
-          type: 'ref',
-          id: getDocId(page)
-        };
-        
-        // Add reference at appropriate level
-        if (occurrence.hierarchyLevel === 0) {
-          sidebarItems.push(refItem);
-        }
+    if (!processedPageIds.has(pageId)) {
+      const mainOccurrence = occurrences.find(occ => !occ.isReference);
+      if (mainOccurrence) {
+        uniquePages.push(mainOccurrence.page);
+        processedPageIds.add(pageId);
       }
     }
   }
+  
+  // Sort pages by hierarchy level and order
+  uniquePages.sort((a, b) => {
+    const aLevel = getHierarchyLevel(a.layoutContext);
+    const bLevel = getHierarchyLevel(b.layoutContext);
+    
+    if (aLevel !== bLevel) {
+      return aLevel - bLevel;
+    }
+    return a.order - b.order;
+  });
+  
+  // Build the sidebar structure
+  const sidebarItems = buildCleanSidebarStructure(uniquePages);
   
   // Generate the sidebars.js content
   const sidebarContent = `module.exports = {
@@ -290,12 +281,81 @@ function generateSidebarsFile(outputPath: string): void {
   verbose(`Generated sidebars.js at ${sidebarPath}`);
 }
 
+// Build clean sidebar structure without duplicates
+function buildCleanSidebarStructure(pages: NotionPage[]): SidebarItem[] {
+  const sidebarItems: SidebarItem[] = [];
+  const categoriesMap = new Map<string, SidebarItem>();
+  
+  for (const page of pages) {
+    const hierarchyLevel = getHierarchyLevel(page.layoutContext);
+    const docId = getDocId(page);
+    
+    // Level 0: Root pages (add directly to sidebar)
+    if (hierarchyLevel === 0) {
+      sidebarItems.push({
+        type: 'doc',
+        id: docId,
+        label: page.nameOrTitle
+      });
+    } else {
+      // Level 1+: Nested pages (create categories)
+      const parentContext = getParentContext(page.layoutContext);
+      const parentPage = findParentPage(pages, parentContext);
+      
+      if (parentPage) {
+        const categoryLabel = parentPage.nameOrTitle;
+        const categoryKey = parentPage.pageId;
+        
+        // Get or create category
+        if (!categoriesMap.has(categoryKey)) {
+          const category: SidebarItem = {
+            type: 'category',
+            label: categoryLabel,
+            items: []
+          };
+          categoriesMap.set(categoryKey, category);
+          sidebarItems.push(category);
+        }
+        
+        // Add page to category
+        const category = categoriesMap.get(categoryKey)!;
+        category.items!.push({
+          type: 'doc',
+          id: docId
+        });
+      }
+    }
+  }
+  
+  return sidebarItems;
+}
+
+// Get parent context path
+function getParentContext(layoutContext: string): string {
+  const parts = layoutContext.split('/').filter(p => p.length > 0);
+  if (parts.length <= 1) return '/';
+  return '/' + parts.slice(0, -1).join('/');
+}
+
+// Find parent page by context
+function findParentPage(pages: NotionPage[], parentContext: string): NotionPage | null {
+  return pages.find(page => 
+    page.layoutContext === parentContext || 
+    (parentContext === '/' && getHierarchyLevel(page.layoutContext) === 0)
+  ) || null;
+}
+
 // Helper function to get document ID from page
 function getDocId(page: NotionPage): string {
   // Use slug without leading slash as document ID
   let docId = page.slug;
   if (docId.startsWith('/')) {
     docId = docId.substring(1);
+  }
+  
+  // Handle special case of root page (slug is "/")
+  if (docId === '' && page.slug === '/') {
+    return 'index';
   }
   
   // If no slug or it's a Notion ID, use sanitized name
