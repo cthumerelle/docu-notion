@@ -32,6 +32,7 @@ import { exit } from "process";
 import { IDocuNotionConfig, loadConfigAsync } from "./config/configuration";
 import { NotionBlock } from "./types";
 import { convertInternalUrl } from "./plugins/internalLinks";
+import { initIconHandling, processPageIcon } from "./icons";
 
 type ImageFileNameFormat = "default" | "content-hash" | "legacy";
 export type DocuNotionOptions = {
@@ -66,6 +67,9 @@ interface PageOccurrence {
 // Map to track all occurrences of each page for deduplication
 const pageOccurrences = new Map<string, PageOccurrence[]>();
 let discoveryOrder = 0;
+
+// Map to store processed icons for reuse
+const processedIcons = new Map<string, string>();
 
 // Structure for sidebar generation
 interface SidebarItem {
@@ -120,6 +124,12 @@ export async function notionPull(options: DocuNotionOptions): Promise<void> {
     options.imgPrefixInMarkdown || options.imgOutputPath || "",
     options.imgOutputPath || "",
     options.locales
+  );
+  
+  // Initialize icon handling
+  await initIconHandling(
+    "./static/icons", // Output path for icons
+    "/icons" // Prefix for markdown references
   );
 
   const notionClient = initNotionClient(options.notionToken);
@@ -176,6 +186,18 @@ async function outputPages(
   config: IDocuNotionConfig,
   pages: Array<NotionPage>
 ) {
+  // Process all page icons first
+  info("Processing page icons...");
+  for (const page of pages) {
+    if (page.iconUrl && !processedIcons.has(page.pageId)) {
+      const iconPath = await processPageIcon(page);
+      if (iconPath) {
+        processedIcons.set(page.pageId, iconPath);
+        verbose(`Processed icon for page: ${page.nameOrTitle}`);
+      }
+    }
+  }
+  
   const context: IDocuNotionContext = {
     getBlockChildren: getBlockChildren,
     // this changes with each page
@@ -223,7 +245,8 @@ async function outputPages(
         ++counts.error_because_no_slug;
       }
 
-      const markdown = await getMarkdownForPage(config, context, page);
+      const processedIcon = processedIcons.get(page.pageId);
+      const markdown = await getMarkdownForPage(config, context, page, processedIcon);
       writePage(page, markdown);
     }
   }
@@ -376,7 +399,8 @@ function buildCleanSidebarStructure(pages: NotionPage[]): SidebarItem[] {
     if (hierarchyLevel === 0) {
       if (pagesWithChildren.has(page.pageId)) {
         // This page has children - create a category with link
-        const categoryLabel = page.icon ? `${page.icon} ${page.nameOrTitle}` : page.nameOrTitle;
+        const processedIcon = processedIcons.get(page.pageId) || page.icon;
+        const categoryLabel = processedIcon ? `${processedIcon} ${page.nameOrTitle}` : page.nameOrTitle;
         const category: SidebarItem = {
           type: 'category',
           label: categoryLabel,
@@ -390,7 +414,8 @@ function buildCleanSidebarStructure(pages: NotionPage[]): SidebarItem[] {
         sidebarItems.push(category);
       } else {
         // This page has no children - add as simple doc
-        const docLabel = page.icon ? `${page.icon} ${page.nameOrTitle}` : page.nameOrTitle;
+        const processedIcon = processedIcons.get(page.pageId) || page.icon;
+        const docLabel = processedIcon ? `${processedIcon} ${page.nameOrTitle}` : page.nameOrTitle;
         sidebarItems.push({
           type: 'doc',
           id: docId,

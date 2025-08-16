@@ -150,19 +150,36 @@ export class NotionPage {
   }
   
   public get icon(): string | undefined {
-    // Notion icons can be emoji or external files
     const iconData = (this.metadata as any).icon;
     if (!iconData) return undefined;
     
     if (iconData.type === 'emoji') {
       return iconData.emoji;
-    } else if (iconData.type === 'file') {
+    }
+    
+    // For now, return undefined for file/external icons
+    // They will be processed separately by the icon download system
+    return undefined;
+  }
+  
+  public get iconUrl(): string | undefined {
+    const iconData = (this.metadata as any).icon;
+    if (!iconData) return undefined;
+    
+    if (iconData.type === 'file') {
       return iconData.file?.url;
     } else if (iconData.type === 'external') {
       return iconData.external?.url;
     }
     
     return undefined;
+  }
+  
+  public get iconType(): 'emoji' | 'file' | 'external' | undefined {
+    const iconData = (this.metadata as any).icon;
+    if (!iconData) return undefined;
+    
+    return iconData.type;
   }
 
   public getPlainTextProperty(

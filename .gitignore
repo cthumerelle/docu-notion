@@ -6,5 +6,8 @@ node_modules/
 version.json
 docs/
 *.orig
+sidebars.js
+static/icons/
+logs.txt
 
 css/docu-notion-styles.css

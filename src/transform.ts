@@ -12,7 +12,8 @@ import { executeWithRateLimitAndRetries } from "./pull";
 export async function getMarkdownForPage(
   config: IDocuNotionConfig,
   context: IDocuNotionContext,
-  page: NotionPage
+  page: NotionPage,
+  processedIcon?: string
 ): Promise<string> {
   info(
     `Reading & converting page ${page.layoutContext}/${
@@ -31,7 +32,7 @@ export async function getMarkdownForPage(
   logDebugFn("markdown from page", () => JSON.stringify(blocks, null, 2));
 
   const body = await getMarkdownFromNotionBlocks(context, config, blocks);
-  const frontmatter = getFrontMatter(page); // todo should be a plugin
+  const frontmatter = getFrontMatter(page, processedIcon); // todo should be a plugin
   return `${frontmatter}\n${body}`;
 }
 
@@ -264,11 +265,11 @@ function registerNotionToMarkdownCustomTransforms(
 }
 
 // enhance:make this built-in plugin so that it can be overridden
-function getFrontMatter(page: NotionPage): string {
+function getFrontMatter(page: NotionPage, processedIcon?: string): string {
   let frontmatter = "---\n";
   
-  // Add icon to title if available
-  const icon = page.icon;
+  // Add icon to title if available (processed icon takes priority)
+  const icon = processedIcon || page.icon;
   const titleWithIcon = icon ? `${icon} ${page.nameOrTitle.replaceAll(":", "-")}` : page.nameOrTitle.replaceAll(":", "-");
   
   frontmatter += `title: ${titleWithIcon}\n`;
