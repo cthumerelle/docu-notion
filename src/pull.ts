@@ -282,15 +282,70 @@ function generateSidebarsFile(outputPath: string): void {
   // Build the sidebar structure
   const sidebarItems = buildCleanSidebarStructure(uniquePages);
   
+  // Validate and clean sidebar items to ensure all referenced docs exist
+  const validatedSidebarItems = validateSidebarItems(sidebarItems, outputPath);
+  
   // Generate the sidebars.js content
   const sidebarContent = `module.exports = {
-  docs: ${JSON.stringify(sidebarItems, null, 2)}
+  docs: ${JSON.stringify(validatedSidebarItems, null, 2)}
 };`;
   
   // Write the sidebars.js file
   const sidebarPath = outputPath.replace(/docs\/?$/, '') + '/sidebars.js';
   fs.writeFileSync(sidebarPath, sidebarContent);
   verbose(`Generated sidebars.js at ${sidebarPath}`);
+}
+
+// Validate sidebar items and remove references to non-existent docs
+function validateSidebarItems(items: SidebarItem[], docsPath: string): SidebarItem[] {
+  const validatedItems: SidebarItem[] = [];
+  
+  for (const item of items) {
+    if (item.type === 'doc') {
+      // Check if the markdown file exists
+      const docPath = `${docsPath}/${item.id}.md`;
+      if (fs.existsSync(docPath)) {
+        validatedItems.push(item);
+      } else {
+        verbose(`⚠️  Removing missing doc from sidebar: ${item.id} (${docPath} does not exist)`);
+      }
+    } else if (item.type === 'category') {
+      // Recursively validate category items
+      const validatedCategoryItems = item.items ? validateSidebarItems(item.items, docsPath) : [];
+      
+      // Check if category link exists (if it has one)
+      let categoryLinkValid = true;
+      if (item.link?.type === 'doc') {
+        const linkDocPath = `${docsPath}/${item.link.id}.md`;
+        if (!fs.existsSync(linkDocPath)) {
+          verbose(`⚠️  Category link missing: ${item.link.id} (${linkDocPath} does not exist)`);
+          categoryLinkValid = false;
+        }
+      }
+      
+      // Only include category if it has valid items or valid link
+      if (validatedCategoryItems.length > 0 || (categoryLinkValid && item.link)) {
+        const validatedCategory: SidebarItem = {
+          ...item,
+          items: validatedCategoryItems
+        };
+        
+        // Remove invalid link
+        if (!categoryLinkValid) {
+          delete validatedCategory.link;
+        }
+        
+        validatedItems.push(validatedCategory);
+      } else {
+        verbose(`⚠️  Removing empty category from sidebar: ${item.label}`);
+      }
+    } else {
+      // For other types (ref, link), pass through
+      validatedItems.push(item);
+    }
+  }
+  
+  return validatedItems;
 }
 
 // Build clean sidebar structure without duplicates
@@ -321,9 +376,10 @@ function buildCleanSidebarStructure(pages: NotionPage[]): SidebarItem[] {
     if (hierarchyLevel === 0) {
       if (pagesWithChildren.has(page.pageId)) {
         // This page has children - create a category with link
+        const categoryLabel = page.icon ? `${page.icon} ${page.nameOrTitle}` : page.nameOrTitle;
         const category: SidebarItem = {
           type: 'category',
-          label: page.nameOrTitle,
+          label: categoryLabel,
           link: {
             type: 'doc',
             id: docId
@@ -334,10 +390,11 @@ function buildCleanSidebarStructure(pages: NotionPage[]): SidebarItem[] {
         sidebarItems.push(category);
       } else {
         // This page has no children - add as simple doc
+        const docLabel = page.icon ? `${page.icon} ${page.nameOrTitle}` : page.nameOrTitle;
         sidebarItems.push({
           type: 'doc',
           id: docId,
-          label: page.nameOrTitle
+          label: docLabel
         });
       }
     } else {

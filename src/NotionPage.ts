@@ -148,6 +148,22 @@ export class NotionPage {
   public get status(): string | undefined {
     return this.getSelectProperty("Status");
   }
+  
+  public get icon(): string | undefined {
+    // Notion icons can be emoji or external files
+    const iconData = (this.metadata as any).icon;
+    if (!iconData) return undefined;
+    
+    if (iconData.type === 'emoji') {
+      return iconData.emoji;
+    } else if (iconData.type === 'file') {
+      return iconData.file?.url;
+    } else if (iconData.type === 'external') {
+      return iconData.external?.url;
+    }
+    
+    return undefined;
+  }
 
   public getPlainTextProperty(
     property: string,

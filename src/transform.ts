@@ -266,10 +266,21 @@ function registerNotionToMarkdownCustomTransforms(
 // enhance:make this built-in plugin so that it can be overridden
 function getFrontMatter(page: NotionPage): string {
   let frontmatter = "---\n";
-  frontmatter += `title: ${page.nameOrTitle.replaceAll(":", "-")}\n`; // I have not found a way to escape colons
+  
+  // Add icon to title if available
+  const icon = page.icon;
+  const titleWithIcon = icon ? `${icon} ${page.nameOrTitle.replaceAll(":", "-")}` : page.nameOrTitle.replaceAll(":", "-");
+  
+  frontmatter += `title: ${titleWithIcon}\n`;
   frontmatter += `sidebar_position: ${page.order}\n`;
   frontmatter += `slug: ${page.slug ?? ""}\n`;
   frontmatter += `notion_id: ${page.pageId}\n`; // Add Notion page ID for future optimization
+  
+  // Add icon as separate field for potential custom usage
+  if (icon) {
+    frontmatter += `notion_icon: "${icon}"\n`;
+  }
+  
   if (page.keywords) frontmatter += `keywords: [${page.keywords}]\n`;
 
   frontmatter += "---\n";
