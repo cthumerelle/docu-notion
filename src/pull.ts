@@ -74,6 +74,10 @@ interface SidebarItem {
   label?: string;
   items?: SidebarItem[];
   href?: string;
+  link?: {
+    type: 'doc';
+    id: string;
+  };
 }
 
 // Structure for building hierarchical sidebar
@@ -293,40 +297,56 @@ function generateSidebarsFile(outputPath: string): void {
 function buildCleanSidebarStructure(pages: NotionPage[]): SidebarItem[] {
   const sidebarItems: SidebarItem[] = [];
   const categoriesMap = new Map<string, SidebarItem>();
+  const pagesWithChildren = new Set<string>();
   
+  // First pass: identify pages that have children
+  for (const page of pages) {
+    const hierarchyLevel = getHierarchyLevel(page.layoutContext);
+    
+    if (hierarchyLevel === 1) {
+      // This is a child page, so its parent has children
+      const parentPage = findParentPage(pages, page.layoutContext);
+      if (parentPage) {
+        pagesWithChildren.add(parentPage.pageId);
+      }
+    }
+  }
+  
+  // Second pass: build the sidebar structure
   for (const page of pages) {
     const hierarchyLevel = getHierarchyLevel(page.layoutContext);
     const docId = getDocId(page);
     
-    // Level 0: Root pages (add directly to sidebar)
+    // Level 0: Root pages
     if (hierarchyLevel === 0) {
-      sidebarItems.push({
-        type: 'doc',
-        id: docId,
-        label: page.nameOrTitle
-      });
+      if (pagesWithChildren.has(page.pageId)) {
+        // This page has children - create a category with link
+        const category: SidebarItem = {
+          type: 'category',
+          label: page.nameOrTitle,
+          link: {
+            type: 'doc',
+            id: docId
+          },
+          items: []
+        };
+        categoriesMap.set(page.pageId, category);
+        sidebarItems.push(category);
+      } else {
+        // This page has no children - add as simple doc
+        sidebarItems.push({
+          type: 'doc',
+          id: docId,
+          label: page.nameOrTitle
+        });
+      }
     } else {
-      // Level 1+: Nested pages (create categories)
+      // Level 1+: Nested pages (add to parent category)
       const parentPage = findParentPage(pages, page.layoutContext);
       verbose(`Child: "${page.nameOrTitle}" | Context: "${page.layoutContext}" | Parent found: ${parentPage?.nameOrTitle || 'NONE'}`);
       
-      if (parentPage) {
-        const categoryLabel = parentPage.nameOrTitle;
-        const categoryKey = parentPage.pageId;
-        
-        // Get or create category
-        if (!categoriesMap.has(categoryKey)) {
-          const category: SidebarItem = {
-            type: 'category',
-            label: categoryLabel,
-            items: []
-          };
-          categoriesMap.set(categoryKey, category);
-          sidebarItems.push(category);
-        }
-        
-        // Add page to category
-        const category = categoriesMap.get(categoryKey)!;
+      if (parentPage && categoriesMap.has(parentPage.pageId)) {
+        const category = categoriesMap.get(parentPage.pageId)!;
         category.items!.push({
           type: 'doc',
           id: docId
